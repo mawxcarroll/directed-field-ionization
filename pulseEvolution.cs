@@ -4,8 +4,8 @@ private void pulseEvolution()
              * Genetic algorithm happens here!
              * (1) calculate fitness score for each pulse
              * (2) erase current averaged data so next generation starts fresh
-             * (3) do elitism
-             * (4) do crossover
+             * (3) do elitism (we created our own custom version of elitism)
+             * (4) do crossover (we used uniform crossover)
              *
              */
 
@@ -13,15 +13,28 @@ private void pulseEvolution()
 
             /*
              * calculate fitness scores
-             *  Use fraction of total signal in gate region as score
+             *  The fitness score drives the evolution of your solution. It will
+             *  be idiosyncratic to your particular problem. In our case, we
+             *  are trying to shape our time resolved field ionization signals
+             *  to separate two overlapping signals. We tried and tested many
+             *  candidate fitness scores and selected the best performer. Of
+             *  course, we may not have found an optimal solution, but we really
+             *  just needed one that worked.
              */
 
             calculateFitnessScore();
 
-            //remove last (zeroed) waveform from population before doing evolution stuff.
+            /*
+             *  remove last waveform from population before doing evolution.
+             *  For the last waveform of every generation, we used an unperturbed
+             *  waveform. This served as our experimental control, but we don't
+             *  want to consider it in the evolution.
+             */
+
             population.RemoveAt(populationSize - 1);
 
-            //update average, min, max fitness scores
+            //update average, min, max fitness scores (for display in
+            // data acquisition software)
             avgFitnessScore.Add(fitnessScores.Average());
             minFitnessScore.Add(fitnessScores.Min());
             maxFitnessScore.Add(fitnessScores.Max());
@@ -30,14 +43,26 @@ private void pulseEvolution()
             maxOverlap.Add(overlapIntegrals.Max());
 
             //reset the average data (except for the final scan)
+            //for data acquisition software display
             if (nscan < numberOfScans)
                 sd.ElementAt<ScanData>(0).resetAvgData();
-            //sort the pulses by fitness score
+
+            /*
+             *  Sort the pulses by fitness score
+             *    It's not important that the fitness score be linear or
+             *    in some way directly proportional to the performance. As
+             *    long as the fitness score sorts the results from best to
+             *    worst, it will work. In other words, only the rank of
+             *    a particular solution is important.
+             */
+
             population.Sort((x, y) => y.fitness.CompareTo(x.fitness));
 
-            //save the previous generation first
+            //save the previous generation first -- we write out every
+            //solution for analysis
 
             //if this is the first generation, create the file for writing
+            //this bit is particular to our data acquisition software
             if (nscan == 1)
             {
                 int day = System.DateTime.Now.Day;
@@ -71,20 +96,48 @@ private void pulseEvolution()
             }
 
 
-            //Console.WriteLine("----->   fitness[0] = " + population[0].fitness + ", fitness[last] = " + population[populationSize - 1].fitness);
-
-            //print fitness scores
-            /*Console.WriteLine("***********************");
-            for (int i = 0; i < population.Count; i++)
-            {
-                Console.WriteLine(population[i].fitness);
-            }
-            */
-            //fill up the rest of the population with new pulses
+            /*
+             *  Generate a new population for the next generation
+             */
             List<FieldPulse> children = new List<FieldPulse>();
+
+            /*
+             * Elitism and "super" Elitism
+             *  Elitism is a common GA strategy. Since crossover (mating) is to
+             *  some extent random and mutation is entirely random, it's possible
+             *  that a new generation could be worse than the previous. To
+             *  prevent this, the best members of the current population are
+             *  propagated unchanged into the new population.
+             *
+             *  We modified this slightly. We created "super" elites that were
+             *  allowed to mutate before propagating. We found this gave us a
+             *  good balance between convergence and diversity. The "normal"
+             *  elites were treated in the standard way and not mutated.
+             */
+
             //Add copies of the super-elites. These will be the copies that are allowed to mutate.
             for (int i = 0; i < superEliteNumber; i++)
                 children.Add(population[i]);
+
+            /*
+             * Do Crossover (mating)
+             *  All pulses are eligible to mate and produce new child pulses for
+             *  the next generation. The goal here is to balance diversity in
+             *  your population with convergence to a good solution. We opted
+             *  for "tournament selection," in which a random set of pulses
+             *  are selected and then the best member of that set is chosen as
+             *  one parent. This is repeated to find the second parent. The size
+             *  of the tournament determines the balance between diversity and
+             *  convergence (large tournaments will tend to find the highest
+             *  scoring pulses).
+             *
+             *  We mate the pulses using "uniform crossover." For each gene, we
+             *  randomly select a parent and copy that gene into the child. We
+             *  have also tried "single point crossover" in which a single
+             *  gene is chosen as a pivot. Genes before that pivot are copied
+             *  from one parent and genes after that pivot are copied from the
+             *  other parent.
+             */
             for (int i = elitismNumber + superEliteNumber; i < population.Count(); i++)
             {
                 //choose first parent using tournament selection
@@ -104,19 +157,6 @@ private void pulseEvolution()
                 tournament.Sort((x, y) => y.fitness.CompareTo(x.fitness));
                 FieldPulse parent1 = tournament[0];
 
-                /*Console.WriteLine("tournament 1 fitness scores");
-                for (int j = 0; j < tournamentSize; j++)
-                    Console.WriteLine(chosen[j] + ": " + tournament[j].fitness);
-                String pulse = "";
-                for (int j = 0; j < parent1.pulse.Count; j++)
-                {
-                    pulse += Math.Round(1000*parent1.pulse[j])/1000.0 + ", ";
-                    if (j % 20 == 0 && j != 0)
-                        pulse += "\n";
-                }
-                Console.WriteLine("Parent 1:");
-                Console.WriteLine(pulse);
-                */
                 //choose second parent using tournament selection
                 tournament = new List<FieldPulse>();
                 chosen = new List<int>();
@@ -134,23 +174,9 @@ private void pulseEvolution()
                 tournament.Sort((x, y) => y.fitness.CompareTo(x.fitness));
                 FieldPulse parent2 = tournament[0];
                 //this is a bit of a hack; shouldn't treat fitness score as unique identifier...
+                //(don't want identical parents!)
                 if (parent1.fitness == parent2.fitness && tournamentSize > 0)
                     parent2 = tournament[1];
-
-                /*Console.WriteLine("tournament 2 fitness scores");
-                for (int j = 0; j < tournamentSize; j++)
-                    Console.WriteLine(chosen[j] + ": " + tournament[j].fitness);
-                pulse = "";
-                for (int j = 0; j < parent2.pulse.Count; j++)
-                {
-                    pulse += Math.Round(1000*parent2.pulse[j])/1000.0 + ", ";
-                    if (j % 20 == 0 && j != 0)
-                        pulse += "\n";
-                }
-                Console.WriteLine("Parent 2:");
-                Console.WriteLine(pulse);
-                */
-
                 //create the child using crossover: uniform or single point
                 FieldPulse child = new FieldPulse();
 
@@ -187,17 +213,7 @@ private void pulseEvolution()
                     }
 
                 }
-                /*
-                pulse = "";
-                for (int j = 0; j < child.pulse.Count; j++)
-                {
-                    pulse += Math.Round(1000*child.pulse[j])/1000.0 + ", ";
-                    if (j % 20 == 0 && j!=0)
-                        pulse += "\n";
-                }
-                Console.WriteLine("Child:");
-                Console.WriteLine(pulse);
-                */
+
                 children.Add(child);
             }
 
@@ -205,58 +221,16 @@ private void pulseEvolution()
             for (int i = elitismNumber; i < population.Count(); i++)
                 population[i] = children[i - elitismNumber];
 
-            //finally, mutate the population
-            //VCG 1/25/17: this is where the decay of the mutation rate is set
+            /*
+             * Finally, mutate the population
+             *  We are currently using a fixed mutation rate. We have also tried
+             *  a "dynamic" mutation rate that decreases as time passes.
+             */
             double progress = (double)nscan / numberOfScans;
             double currentMutationRate = mutationRate;
 
 
-            /*
-            //VCG 3/9/17 Changed the way the mutation rate is calculated
-            double highMutationScans = 20;
-            double zeroMutationScans = 5;
-            if (numberOfScans <= highMutationScans + zeroMutationScans)
-            {
-                if (nscan <= highMutationScans)
-                    currentMutationRate = mutationRate;
-                else
-                    currentMutationRate = 0.0;
-            } // if the total number of generations is less than the combined number of high mutation generations and zero mutation generations, then just use the high mutation rate
-              // for the normal number of generations (if you get that far), and then a zero mutation rate for whatever is left of the scan
-            else
-            {
-                if (nscan <= highMutationScans)
-                    currentMutationRate = mutationRate; // if we are still within the high mutation generations, the mutation rate is the user-entered value
-                else if (nscan > highMutationScans && nscan <= numberOfScans - zeroMutationScans)
-                    currentMutationRate = mutationRate - (nscan - highMutationScans) * (mutationRate / (numberOfScans - highMutationScans - zeroMutationScans));
-                    // if we are between the high mutation generations and the zero mutation generations, the mutation rate linearly decays
-                else
-                    currentMutationRate = 0.0; // if we are within the zero mutation generations, mutation rate = 0
-            }
-            //Console.WriteLine("generation " + nscan + ", mutation rate is " + currentMutationRate);
-            */
 
-            // VCG 4/20/17: temporarily disabled the decay on the mutation rate
-            /*
-             if (progress < 0.1)
-                 currentMutationRate = mutationRate;
-             if (progress > 0.1)
-             {
-                 double decayRate = -0.4;//changed from -0.1 VCG 1/26/17
-                 double tp = 5.0 * (progress - 0.1) / 0.9;
-                 if (progress > 0.6)
-                     decayRate = -0.6;//changed from -0.3 VCG 1/30/17
-                 if (progress > 0.7)
-                     decayRate = -0.8;//changed from -0.5 VCG 1/30/17
-                 if (progress > 0.8)
-                     decayRate = -1.0;
-                 if (progress > 0.9)
-                     decayRate = -1.5;
-                 currentMutationRate = mutationRate * Math.Exp(decayRate * tp);
-             }
-             */
-
-            //Console.WriteLine("mutation rate is " + currentMutationRate);
             for (int i = superEliteNumber; i < population.Count(); i++)
             {
                 for (int j = 0; j < pulseLength; j++)
@@ -274,7 +248,6 @@ private void pulseEvolution()
             population.Add(new FieldPulse());
 
             for (int j = 0; j < pulseLength; j++)
-                population[population.Count() - 1].pulse.Add(0); // last member of population is always a zeroed waveform
-
+                population[population.Count() - 1].pulse.Add(0);
 
         }
